@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Temperature Anomaly Detector</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: #b3c5e8;
+            padding: 30px;
+
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 1400px;
+            margin: 0 auto;
+
+            display: flex;              /* ✅ vertical layout */
+            flex-direction: column;
+            gap: 25px;
+        }
+
+        .card {
+            background: white;
+            padding: 30px;
+            border-radius: 16px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.08);
+        }
+
+        h1, h2 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+
+        .start-btn {
+            background: #28a745;
+            color: white;
+        }
+
+        .stop-btn {
+            background: #dc3545;
+            color: white;
+        }
+
+        .info-box {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+        }
+
+        .info-box p {
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+
+        .status-box {
+            margin-top: 20px;
+            padding: 18px;
+            border-radius: 10px;
+            text-align: center;
+            font-size: 18px;
+            font-weight: bold;
+        }
+
+        .normal {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .critical {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .window-box {
+            margin-top: 20px;
+            background: #fafafa;
+            border-radius: 10px;
+            padding: 15px;
+            font-size: 14px;
+            line-height: 1.8;
+            word-wrap: break-word;
+        }
+
+        .chart-container {
+            height: 500px;
+            position: relative;
+        }
+
+        canvas {
+            width: 100% !important;
+            height: 100% !important;
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <!-- ✅ CARD 1 (UNCHANGED UI) -->
+    <div class="card">
+
+        <h1>Temperature Detector</h1>
+
+        <button id="streamButton" class="start-btn" onclick="toggleStream()">
+            Start Streaming
+        </button>
+        <button onclick="window.location.href='/logout/'" style="margin-left:10px;">
+            Logout
+        </button>
+
+        <div class="info-box">
+            <p id="temp">Current Temperature: --</p>
+            <p id="count">Collected Values: 0 / 30</p>
+            <p id="anomaly">Anomaly Probability: --%</p>
+        </div>
+
+        <div id="statusBox" class="status-box">
+            Waiting for streaming...
+        </div>
+
+        <div class="window-box">
+            <strong>Rolling Temperature Window:</strong>
+            <div id="windowData"></div>
+        </div>
+
+    </div>
+
+    <!-- ✅ CARD 2 (GRAPH BELOW) -->
+    <div class="card">
+
+        <h2>Live Temperature Monitoring Graph</h2>
+
+        <div class="chart-container">
+            <canvas id="tempChart"></canvas>
+        </div>
+
+    </div>
+
+</div>
+
+<script>
+
+let intervalId = null;
+let tempWindow = [];
+let isStreaming = false;
+let isPredicting = false;
+let timeIndex = 0;
+
+const LOWER = 50;
+const UPPER = 98;
+
+// =====================
+// CHART
+// =====================
+const ctx = document.getElementById('tempChart').getContext('2d');
+
+const tempChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+        labels: [],
+        datasets: [
+
+            // 🔵 Temperature → line only
+            {
+                label: 'Temperature',
+                data: [],
+                borderColor: '#007bff',
+                borderWidth: 3,
+                tension: 0.35,
+                pointRadius: 0   // 👈 no dots
+            },
+
+            // 🔴 Anomaly → dots only
+            {
+                label: 'Anomaly',
+                data: [],
+                pointBackgroundColor: 'red',
+                pointBorderColor: 'red',
+                pointBorderWidth: 0, 
+                pointRadius: 5,
+                showLine: false   // 👈 no line
+            },
+
+            // 🟠 Lower → dashed line
+            {
+                label: 'Lower (50)',
+                data: [],
+                borderColor: 'orange',
+                borderDash: [5, 5],
+                borderWidth: 2,
+                pointRadius: 0
+            },
+
+            // 🟠 Upper → dashed line
+            {
+                label: 'Upper (98)',
+                data: [],
+                borderColor: 'orange',
+                borderDash: [5, 5],
+                borderWidth: 2,
+                pointRadius: 0
+            }
+        ]
+    },
+    options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    plugins: {
+        legend: {
+            position: 'top',
+            labels: {
+                usePointStyle: true,   // 👈 important
+                boxWidth: 20,
+
+                generateLabels: function(chart) {
+                    const datasets = chart.data.datasets;
+
+                    return datasets.map((ds, i) => {
+
+                        let pointStyle = 'line';
+
+                        if (ds.label === 'Anomaly') {
+                            pointStyle = 'circle'; 
+                            
+                        }
+
+                         return {
+                            text: ds.label,
+                            fillStyle: ds.label === 'Anomaly' 
+                                ? ds.pointBackgroundColor 
+                                : ds.borderColor,
+                            strokeStyle: ds.borderColor || ds.pointBackgroundColor,
+                            lineWidth: 3,
+                            lineDash: ds.borderDash || [],
+                            pointStyle: pointStyle,
+
+                            // ✅ ADD THIS LINE (removes black box)
+                            backgroundColor: 'transparent',
+
+                            hidden: !chart.isDatasetVisible(i),
+                            datasetIndex: i
+                        };
+                    });
+                }
+            }
+        }
+    },
+    scales: {
+        y: {
+            min: 0,
+            max: 120
+        }
+    }
+}
+});
+
+// =====================
+// UPDATE CHART
+// =====================
+function updateChart(temp) {
+
+    tempChart.data.labels.push(timeIndex++);
+
+    tempChart.data.datasets[0].data.push(temp);
+
+    const isAnomaly = (temp < LOWER || temp > UPPER);
+    tempChart.data.datasets[1].data.push(isAnomaly ? temp : null);
+
+    tempChart.data.datasets[2].data.push(LOWER);
+    tempChart.data.datasets[3].data.push(UPPER);
+
+    if (tempChart.data.labels.length > 100) {
+        tempChart.data.labels.shift();
+        tempChart.data.datasets.forEach(ds => ds.data.shift());
+    }
+
+    tempChart.update();
+}
+
+// =====================
+// STREAM
+// =====================
+function toggleStream() {
+    isStreaming ? stopStream() : startStream();
+}
+
+function startStream() {
+
+    if (intervalId) return;
+
+    isStreaming = true;
+
+    const button = document.getElementById('streamButton');
+    button.innerText = 'Stop Streaming';
+    button.className = 'stop-btn';
+
+    intervalId = setInterval(() => {
+
+        let temp = parseFloat((Math.random() * 60 + 50).toFixed(2));
+
+        tempWindow.push(temp);
+        if (tempWindow.length > 30) tempWindow.shift();
+
+        document.getElementById('temp').innerText =
+            'Current Temperature: ' + temp + '°C';
+
+        document.getElementById('count').innerText =
+            'Collected Values: ' + tempWindow.length + ' / 30';
+
+        updateWindowUI();
+        updateChart(temp);
+
+        if (tempWindow.length === 30) {
+            sendPrediction();
+        }
+
+    }, 500);
+}
+
+function stopStream() {
+
+    clearInterval(intervalId);
+    intervalId = null;
+
+    isStreaming = false;
+
+    const button = document.getElementById('streamButton');
+    button.innerText = 'Start Streaming';
+    button.className = 'start-btn';
+
+    document.getElementById('statusBox').innerText = 'Streaming Stopped';
+}
+
+// =====================
+// PREDICTION
+// =====================
+function sendPrediction() {
+
+    if (isPredicting) return;
+
+    isPredicting = true;
+
+    fetch('/predict/', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({sequence: tempWindow})
+    })
+    .then(res => res.json())
+    .then(data => {
+
+        let prob = parseFloat(data.probability || 0);
+
+        document.getElementById('anomaly').innerText =
+            'Anomaly Probability: ' + prob.toFixed(2) + '%';
+
+        const statusBox = document.getElementById('statusBox');
+        statusBox.className = 'status-box';
+
+        if (prob > 70) {
+            statusBox.classList.add('critical');
+            statusBox.innerText = 'Critical Alert (' + prob.toFixed(2) + '%)';
+        }
+        else if (prob > 50) {
+            statusBox.classList.add('warning');
+            statusBox.innerText = 'Warning (' + prob.toFixed(2) + '%)';
+        }
+        else {
+            statusBox.classList.add('normal');
+            statusBox.innerText = 'Normal';
+        }
+
+    })
+    .finally(() => {
+        isPredicting = false;
+    });
+}
+
+// =====================
+// WINDOW UI
+// =====================
+function updateWindowUI() {
+
+    document.getElementById('windowData').innerText =
+        tempWindow.map(v => v.toFixed(2)).join(' ');
+}
+
+</script>
+
+</body>
+</html>

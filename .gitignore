@@ -1,0 +1,10 @@
+# Ignore Python virtual environments and environment files
+.env
+venv/
+env/
+
+# Ignore local virtual environment folders
+.venv/
+__pycache__/
+*.py[cod]
+db.sqlite3
